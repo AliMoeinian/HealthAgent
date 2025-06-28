@@ -1,0 +1,21 @@
+# Secrets
+apikey.env
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyd
+*.pyo
+
+# User Data
+UserData/
+Results/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
