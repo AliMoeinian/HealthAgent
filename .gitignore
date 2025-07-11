@@ -19,3 +19,13 @@ Results/
 .idea/
 *.swp
 *.swo
+
+# Node.js/React
+node_modules/
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
