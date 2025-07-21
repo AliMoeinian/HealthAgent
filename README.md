@@ -1,40 +1,60 @@
-# AI-Agents-for-Medical-Diagnostics
+# 🏋️ AI Health & Fitness Agents System
 
-<img width="900" alt="image" src="https://github.com/user-attachments/assets/b7c87bf6-dfff-42fe-b8d1-9be9e6c7ce86">
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![LangChain](https://img.shields.io/badge/LangChain-0.1.0-orange)
+![OpenRouter](https://img.shields.io/badge/OpenRouter-Gemma3-purple)
 
-A Python project designed to create specialized LLM-based AI agents that analyze complex medical cases. The system integrates insights from various medical professionals to provide comprehensive assessments and personalized treatment recommendations, demonstrating the potential of AI in multidisciplinary medicine.
+A personalized health coaching system with three specialized AI agents that generate fitness plans, nutrition guides, and wellness recommendations.
+This Repository is going to Get Advanced soon!
 
-## Current Version Overview
+## ✨ Features
 
-In the current version, we have implemented three AI agents using GPT-4o, each specializing in a different aspect of medical analysis. A medical report is passed to each of these agents, who then analyze the report simultaneously using threading, based on their specific area of expertise. Each agent provides recommendations and diagnoses from their perspective. After all AI agents complete their analyses, the results are combined and passed to a large language model, which summarizes the findings and identifies three potential health issues for the patient.
+- **Fitness Trainer Agent**  
+  🏋️ Creates customized workout plans based on:  
+  - Fitness level (Beginner/Intermediate/Advanced)  
+  - Available equipment (Home/Gym)  
+  - Injury restrictions  
 
-### AI Agents
+- **Nutritionist Agent**  
+  🥗 Designs meal plans with:  
+  - Dietary preferences (Vegan/Keto/Mediterranean)  
+  - Allergies/Sensitivities  
+  - Caloric targets  
 
-**1. Cardiologist Agent**
+- **Health Advisor Agent**  
+  💆 Provides holistic recommendations for:  
+  - Sleep optimization  
+  - Stress management  
+  - Habit formation  
 
-- **Focus**: Identify any potential cardiac issues that could explain the patient's symptoms, including ruling out conditions such as arrhythmias or structural abnormalities that might not be apparent in initial evaluations.
-  
-- **Recommendation**: Suggest additional cardiovascular testing or continuous monitoring if necessary to uncover hidden heart-related problems. Provide management strategies if a cardiovascular issue is identified.
+## 🚀 Getting Started
 
-**2. Psychologist Agent**
+### Prerequisites
+- Python 3.11+
+- OpenRouter API key ([Get yours here](https://openrouter.ai/))
 
-- **Focus**: Determine if the symptoms align with a psychological condition, such as panic disorder or another anxiety-related issue. Assess the impact of stress, anxiety, and lifestyle factors on the patient’s overall condition.
-  
-- **Recommendation**: Recommend appropriate psychological interventions (e.g., therapy, stress management techniques) or medications to address the psychological aspects of the symptoms. Evaluate whether adjustments to the current psychological management are needed.
+### Installation
+```bash
+# Clone the repository
+git clone https://github.com/AliMoeinian/HealthAgent.git
 
-**3. Pulmonologist Agent**
+# Install dependencies
+pip install -r requirements.txt
 
-- **Focus**: Assess whether symptoms like shortness of breath and dizziness are due to a respiratory condition, such as asthma or a breathing disorder, that could mimic cardiac symptoms.
-  
-- **Recommendation**: Suggest additional respiratory evaluations, such as lung function tests or exercise-induced bronchoconstriction tests, to rule out any underlying lung conditions. Recommend breathing exercises or other treatments if a respiratory issue is suspected.
-
-## Future Enhancements
-
-In future versions, the system could expand to include a broader range of AI agents, each specializing in different medical fields, such as neurology, endocrinology, and immunology, to provide even more comprehensive analyses. These AI agents could be implemented using the [Assistant API from OpenAI](https://platform.openai.com/docs/assistants/overview) and use `function calling` and `code interpreter` capabilities to enhance their intelligence and effectiveness. Additionally, advanced parsing methodologies could be introduced to handle medical reports with more complex structures, allowing the system to accurately interpret and analyze a wider variety of medical data.
-
-## Repository Structure
-
-- **Medical Reports Folder**: Contains a synthetic medical report of a patient with Panic Attack disorder.
-- **Results Folder**: Stores the outputs of the agentic system.
-  
-**To be able to run the code, please insert your OpenAI API key within the `apikey.env` file.**
+# Set up environment
+Add your OpenRouter Key (or any API Key) to: apikey.env
+`NOTE`: If you don't use the OpenRouter API,you have to make some changes to the file Agents.py, where I defined the model and API Path
+```
+---
+Project Structure :
+```bash
+HealthAgent/
+├── UserData/              # User profile storage
+├── Results/               # Generated health plans
+├── Utils/
+│   └── Agents.py          # AI agent implementations
+├── main.py                # Entry point
+├── requirements.txt       # Dependencies
+└── apikey.env             # API keys (ignored by Git)
+```
+---
