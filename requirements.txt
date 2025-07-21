@@ -1,7 +1,13 @@
+# Web Framework
+Flask
+Flask-Cors
+
+# LangChain & AI
 langchain
 langchain-community
-langchain-openai 
+langchain-openai
+
+# Utilities
 python-dotenv
-reportlab  
-requests  
+requests
 httpx
