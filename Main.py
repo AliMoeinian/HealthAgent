@@ -3,7 +3,7 @@ import json
 import sqlite3
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from Utils.ChatAgent import chat_manager
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 # Import all agent classes
 from Utils.Agents import HealthSummary, FitnessTrainer, Nutritionist, HealthAdvisor
-
+from Utils.ChatAgent import chat_manager
 # Load environment variables from apikey.env
 load_dotenv(dotenv_path='apikey.env')
 
@@ -47,6 +47,8 @@ def map_stress_level(level):
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
+    
+    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         first_name TEXT NOT NULL,
@@ -57,6 +59,8 @@ def init_db():
         national_code TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL
     )''')
+    
+    # Profiles table
     c.execute('''CREATE TABLE IF NOT EXISTS profiles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER UNIQUE,
@@ -69,6 +73,8 @@ def init_db():
         chronic_conditions TEXT, bmi TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
+    
+    # Agent history table
     c.execute('''CREATE TABLE IF NOT EXISTS agent_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -77,8 +83,22 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
+    
+    # 🆕 Chat history table - این خط مهم اضافه شده!
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        agent_type TEXT,
+        thread_id TEXT,
+        human_message TEXT,
+        ai_response TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+    
     conn.commit()
     conn.close()
+    print("✅ Database initialized successfully!")
 
 def save_user(first_name, last_name, age, gender, phone_number, national_code, password):
     conn = get_db_connection()
@@ -147,6 +167,7 @@ def save_history(user_id, agent_type, recommendation):
     conn.close()
 
 # --- Agent-Related Functions ---
+# بخش اصلاح شده از تابع get_profile_for_agent در Main.py
 def get_profile_for_agent(user_id):
     """Fetches and formats a comprehensive user profile for agent processing."""
     conn = get_db_connection()
@@ -180,7 +201,7 @@ def get_profile_for_agent(user_id):
         "caloric_target": 2000,
         "lifestyle": data['activity_level'],
         "sleep_quality": f"{data['sleep_hours']} hours, quality: {data['sleep_quality']}",
-        "water_intake_liters": data['water_intake'],
+        "water_intake_liters": data['water_intake'],  # این خط اصلاح شد
         "stress_level": map_stress_level(data['stress_level']),
         "habits": f"Smoking: {data['smoking_status']}, Alcohol: {data['alcohol_consumption']}",
         "medications_supplements": data['medications_supplements'] or 'none',
@@ -327,6 +348,238 @@ def get_history_api():
 def health_check():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()}), 200
 
+# Replace your existing chat endpoints with these debug versions
+
+@app.route('/api/chat', methods=['POST'])
+@handle_errors
+def chat_endpoint():
+    """Handle chat messages"""
+    try:
+        data = request.get_json()
+        print(f"🔍 Chat request data: {data}")  # Debug line
+        
+        # Validate required fields
+        required_fields = ['userId', 'agentType', 'message', 'threadId']
+        if not all(field in data for field in required_fields):
+            print(f"❌ Missing required fields")  # Debug line
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        user_id = data['userId']
+        agent_type = data['agentType']
+        message = data['message'].strip()
+        thread_id = data['threadId']
+        
+        print(f"🔍 Processing chat for user {user_id}, agent {agent_type}")  # Debug line
+        
+        # Validate agent type
+        valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
+        if agent_type not in valid_agents:
+            return jsonify({'error': 'Invalid agent type'}), 400
+        
+        # Validate message
+        if not message or len(message) > 1000:
+            return jsonify({'error': 'Message must be between 1-1000 characters'}), 400
+        
+        # Generate response using chat manager
+        result = chat_manager.generate_response(user_id, agent_type, message, thread_id)
+        print(f"✅ Chat response generated successfully")  # Debug line
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'response': result['response']
+            }), 200
+        else:
+            print(f"❌ Chat generation failed: {result['error']}")  # Debug line
+            return jsonify({
+                'success': False,
+                'error': result['error']
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Chat endpoint error: {str(e)}")  # Debug line
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+
+@app.route('/api/chat-history', methods=['POST'])
+@handle_errors
+def get_chat_history():
+    """Get chat history for a user and agent"""
+    try:
+        data = request.get_json()
+        print(f"🔍 Chat history request data: {data}")  # Debug line
+        
+        if not all(k in data for k in ['userId', 'agentType']):
+            print(f"❌ Missing userId or agentType")  # Debug line
+            return jsonify({'error': 'Missing userId or agentType'}), 400
+        
+        user_id = data['userId']
+        agent_type = data['agentType']
+        limit = data.get('limit', 20)
+        
+        print(f"🔍 Processing chat history for user {user_id}, agent {agent_type}")  # Debug line
+        
+        # Validate agent type
+        valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
+        if agent_type not in valid_agents:
+            return jsonify({'error': 'Invalid agent type'}), 400
+        
+        history = chat_manager.get_chat_history(user_id, agent_type, limit)
+        print(f"✅ Chat history retrieved: {len(history)} messages")  # Debug line
+        
+        return jsonify({
+            'success': True,
+            'history': history
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Chat history error: {str(e)}")  # Debug line
+        import traceback
+        traceback.print_exc()  # Print full stack trace
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get chat history: {str(e)}'
+        }), 500
+
+@app.route('/api/clear-chat', methods=['POST'])
+@handle_errors
+def clear_chat_history():
+    """Clear chat history for a user and agent"""
+    try:
+        data = request.get_json()
+        print(f"🔍 Clear chat request data: {data}")  # Debug line
+        
+        if not all(k in data for k in ['userId', 'agentType']):
+            return jsonify({'error': 'Missing userId or agentType'}), 400
+        
+        user_id = data['userId']
+        agent_type = data['agentType']
+        
+        print(f"🔍 Clearing chat history for user {user_id}, agent {agent_type}")  # Debug line
+        
+        # Validate agent type
+        valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
+        if agent_type not in valid_agents:
+            return jsonify({'error': 'Invalid agent type'}), 400
+        
+        chat_manager.clear_chat_history(user_id, agent_type)
+        print(f"✅ Chat history cleared successfully")  # Debug line
+        
+        return jsonify({
+            'success': True,
+            'message': 'Chat history cleared successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Clear chat error: {str(e)}")  # Debug line
+        return jsonify({
+            'success': False,
+            'error': f'Failed to clear chat history: {str(e)}'
+        }), 500
+
+# اضافه کردن این endpoints به فایل Main.py
+
+@app.route('/api/get-current-plans', methods=['POST'])
+@handle_errors
+def get_current_plans_api():
+    """Get current plans (updated or original) for display"""
+    data = request.get_json()
+    user_id = data.get('userId')
+    if not user_id:
+        return jsonify({'error': 'userId is required'}), 400
+
+    try:
+        from Utils.ChatAgent import chat_manager
+        
+        agent_types = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
+        current_plans = {}
+        
+        for agent_type in agent_types:
+            plan_info = chat_manager.get_current_plan(user_id, agent_type)
+            current_plans[agent_type] = {
+                'content': plan_info['plan'],
+                'is_updated': plan_info['is_updated'],
+                'modifications': plan_info['modifications']
+            }
+        
+        return jsonify(current_plans), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting current plans: {str(e)}")
+        return jsonify({'error': 'Failed to get current plans'}), 500
+
+@app.route('/api/plan-updates-history', methods=['POST'])
+@handle_errors
+def get_plan_updates_history():
+    """Get history of plan updates"""
+    data = request.get_json()
+    user_id = data.get('userId')
+    agent_type = data.get('agentType')
+    
+    if not user_id or not agent_type:
+        return jsonify({'error': 'userId and agentType are required'}), 400
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT modification_summary, created_at, updated_plan
+            FROM updated_plans
+            WHERE user_id = ? AND agent_type = ?
+            ORDER BY created_at DESC
+            LIMIT 10
+        """, (user_id, agent_type))
+        
+        updates = []
+        for row in c.fetchall():
+            updates.append({
+                'summary': row['modification_summary'],
+                'timestamp': row['created_at'],
+                'preview': row['updated_plan'][:200] + '...' if len(row['updated_plan']) > 200 else row['updated_plan']
+            })
+        
+        conn.close()
+        return jsonify({'updates': updates}), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting plan updates history: {str(e)}")
+        return jsonify({'error': 'Failed to get updates history'}), 500
+
+@app.route('/api/reset-to-original', methods=['POST'])
+@handle_errors
+def reset_to_original_plan():
+    """Reset agent plan to original version"""
+    data = request.get_json()
+    user_id = data.get('userId')
+    agent_type = data.get('agentType')
+    
+    if not user_id or not agent_type:
+        return jsonify({'error': 'userId and agentType are required'}), 400
+
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Delete all updated plans for this user and agent
+        c.execute("""
+            DELETE FROM updated_plans
+            WHERE user_id = ? AND agent_type = ?
+        """, (user_id, agent_type))
+        
+        # Also clear chat history to start fresh
+        c.execute("""
+            DELETE FROM chat_history
+            WHERE user_id = ? AND agent_type = ?
+        """, (user_id, agent_type))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Plan reset to original version successfully'}), 200
+        
+    except Exception as e:
+        print(f"❌ Error resetting plan: {str(e)}")
+        return jsonify({'error': 'Failed to reset plan'}), 500
+        
 # --- Main Execution ---
 if __name__ == "__main__":
     ensure_directory_exists(USER_DATA_DIR)
@@ -336,3 +589,4 @@ if __name__ == "__main__":
     print("🚀 Starting HealthAgent Server...")
     print("📡 Listening on http://127.0.0.1:5000")
     app.run(debug=True, port=5000, host='127.0.0.1')
+

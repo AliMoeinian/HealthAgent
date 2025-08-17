@@ -11,3 +11,12 @@ langchain-openai
 python-dotenv
 requests
 httpx
+
+# Existing requirements
+werkzeug 
+
+
+# New requirements for chat functionality
+langgraph>=0.0.40
+langchain>=0.1.0
+sqlite3
