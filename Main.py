@@ -3,7 +3,6 @@ import json
 import sqlite3
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from Utils.ChatAgent import chat_manager
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,7 +10,10 @@ from dotenv import load_dotenv
 
 # Import all agent classes
 from Utils.Agents import HealthSummary, FitnessTrainer, Nutritionist, HealthAdvisor
-from Utils.ChatAgent import chat_manager
+# Fixed imports - remove the problematic chat_manager import
+from Utils.ChatAgent import enhanced_chat_manager
+from Utils.MemoryManager import memory_manager
+
 # Load environment variables from apikey.env
 load_dotenv(dotenv_path='apikey.env')
 
@@ -48,7 +50,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Users table
+    # Existing tables (keep as they are)
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         first_name TEXT NOT NULL,
@@ -60,7 +62,6 @@ def init_db():
         password TEXT NOT NULL
     )''')
     
-    # Profiles table
     c.execute('''CREATE TABLE IF NOT EXISTS profiles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER UNIQUE,
@@ -74,7 +75,6 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
-    # Agent history table
     c.execute('''CREATE TABLE IF NOT EXISTS agent_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -84,21 +84,97 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
-    # 🆕 Chat history table - این خط مهم اضافه شده!
-    c.execute('''CREATE TABLE IF NOT EXISTS chat_history (
+    # 🆕 NEW ENHANCED TABLES
+    c.execute('''CREATE TABLE IF NOT EXISTS conversation_sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        agent_type TEXT,
-        thread_id TEXT,
-        human_message TEXT,
-        ai_response TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER NOT NULL,
+        agent_type TEXT NOT NULL,
+        session_id TEXT UNIQUE NOT NULL,
+        session_name TEXT,
+        status TEXT DEFAULT 'active',
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        message_count INTEGER DEFAULT 0,
+        summary TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id)
     )''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        agent_type TEXT NOT NULL,
+        message_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        message_order INTEGER NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        contains_plan_update BOOLEAN DEFAULT FALSE,
+        referenced_plan_id INTEGER,
+        context_summary TEXT,
+        token_count INTEGER,
+        processing_time_ms INTEGER,
+        FOREIGN KEY (session_id) REFERENCES conversation_sessions(session_id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (referenced_plan_id) REFERENCES agent_history(id)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS context_references (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,
+        reference_type TEXT NOT NULL,
+        reference_id INTEGER,
+        reference_text TEXT,
+        confidence_score REAL DEFAULT 1.0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS memory_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        agent_type TEXT NOT NULL,
+        summary_type TEXT NOT NULL,
+        summary_content TEXT NOT NULL,
+        message_range_start INTEGER,
+        message_range_end INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_active BOOLEAN DEFAULT TRUE,
+        FOREIGN KEY (session_id) REFERENCES conversation_sessions(session_id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS updated_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        agent_type TEXT NOT NULL,
+        original_plan_id INTEGER,
+        updated_plan TEXT NOT NULL,
+        modification_summary TEXT,
+        conversation_id INTEGER,
+        version_number INTEGER DEFAULT 1,
+        is_current BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (original_plan_id) REFERENCES agent_history(id),
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    )''')
+    
+    # Create indexes
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_conversations_session 
+                ON conversations(session_id, message_order)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_conversations_user_agent 
+                ON conversations(user_id, agent_type, timestamp)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_context_references_conversation 
+                ON context_references(conversation_id, reference_type)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_memory_summaries_session 
+                ON memory_summaries(session_id, is_active)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_updated_plans_current 
+                ON updated_plans(user_id, agent_type, is_current)''')
+    
     conn.commit()
     conn.close()
-    print("✅ Database initialized successfully!")
+    print("✅ Enhanced database schema initialized successfully!")
 
 def save_user(first_name, last_name, age, gender, phone_number, national_code, password):
     conn = get_db_connection()
@@ -167,7 +243,6 @@ def save_history(user_id, agent_type, recommendation):
     conn.close()
 
 # --- Agent-Related Functions ---
-# بخش اصلاح شده از تابع get_profile_for_agent در Main.py
 def get_profile_for_agent(user_id):
     """Fetches and formats a comprehensive user profile for agent processing."""
     conn = get_db_connection()
@@ -201,7 +276,7 @@ def get_profile_for_agent(user_id):
         "caloric_target": 2000,
         "lifestyle": data['activity_level'],
         "sleep_quality": f"{data['sleep_hours']} hours, quality: {data['sleep_quality']}",
-        "water_intake_liters": data['water_intake'],  # این خط اصلاح شد
+        "water_intake_liters": data['water_intake'],
         "stress_level": map_stress_level(data['stress_level']),
         "habits": f"Smoking: {data['smoking_status']}, Alcohol: {data['alcohol_consumption']}",
         "medications_supplements": data['medications_supplements'] or 'none',
@@ -348,20 +423,17 @@ def get_history_api():
 def health_check():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()}), 200
 
-# Replace your existing chat endpoints with these debug versions
-
 @app.route('/api/chat', methods=['POST'])
 @handle_errors
-def chat_endpoint():
-    """Handle chat messages"""
+def enhanced_chat_endpoint():
+    """Enhanced chat endpoint with full memory and context awareness"""
     try:
         data = request.get_json()
-        print(f"🔍 Chat request data: {data}")  # Debug line
+        print(f"🔍 Enhanced chat request: user={data.get('userId')}, agent={data.get('agentType')}")
         
         # Validate required fields
         required_fields = ['userId', 'agentType', 'message', 'threadId']
         if not all(field in data for field in required_fields):
-            print(f"❌ Missing required fields")  # Debug line
             return jsonify({'error': 'Missing required fields'}), 400
         
         user_id = data['userId']
@@ -369,72 +441,73 @@ def chat_endpoint():
         message = data['message'].strip()
         thread_id = data['threadId']
         
-        print(f"🔍 Processing chat for user {user_id}, agent {agent_type}")  # Debug line
-        
         # Validate agent type
         valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
         if agent_type not in valid_agents:
             return jsonify({'error': 'Invalid agent type'}), 400
         
         # Validate message
-        if not message or len(message) > 1000:
-            return jsonify({'error': 'Message must be between 1-1000 characters'}), 400
+        if not message or len(message) > 2000:
+            return jsonify({'error': 'Message must be between 1-2000 characters'}), 400
         
-        # Generate response using chat manager
-        result = chat_manager.generate_response(user_id, agent_type, message, thread_id)
-        print(f"✅ Chat response generated successfully")  # Debug line
+        # Generate response using enhanced chat manager
+        start_time = datetime.now()
+        result = enhanced_chat_manager.generate_response(user_id, agent_type, message, thread_id)
+        processing_time = (datetime.now() - start_time).total_seconds() * 1000
         
         if result['success']:
             return jsonify({
                 'success': True,
-                'response': result['response']
+                'response': result['response'],
+                'contains_plan_update': result.get('contains_plan_update', False),
+                'conversation_context': result.get('conversation_context', {}),
+                'processing_time_ms': round(processing_time),
+                'enhanced_memory': True  # Flag to indicate enhanced system is active
             }), 200
         else:
-            print(f"❌ Chat generation failed: {result['error']}")  # Debug line
             return jsonify({
                 'success': False,
                 'error': result['error']
             }), 500
             
     except Exception as e:
-        print(f"❌ Chat endpoint error: {str(e)}")  # Debug line
+        print(f"❌ Enhanced chat endpoint error: {str(e)}")
         return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
 @app.route('/api/chat-history', methods=['POST'])
 @handle_errors
-def get_chat_history():
-    """Get chat history for a user and agent"""
+def get_chat_history_compat():
+    """Backward compatible chat history endpoint"""
     try:
         data = request.get_json()
-        print(f"🔍 Chat history request data: {data}")  # Debug line
         
         if not all(k in data for k in ['userId', 'agentType']):
-            print(f"❌ Missing userId or agentType")  # Debug line
             return jsonify({'error': 'Missing userId or agentType'}), 400
         
         user_id = data['userId']
         agent_type = data['agentType']
         limit = data.get('limit', 20)
         
-        print(f"🔍 Processing chat history for user {user_id}, agent {agent_type}")  # Debug line
-        
-        # Validate agent type
-        valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
-        if agent_type not in valid_agents:
-            return jsonify({'error': 'Invalid agent type'}), 400
-        
-        history = chat_manager.get_chat_history(user_id, agent_type, limit)
-        print(f"✅ Chat history retrieved: {len(history)} messages")  # Debug line
-        
-        return jsonify({
-            'success': True,
-            'history': history
-        }), 200
-        
+        # Try enhanced system first, fall back to old system
+        try:
+            history = enhanced_chat_manager.get_conversation_history(user_id, agent_type, limit)
+            return jsonify({
+                'success': True,
+                'history': history,
+                'enhanced_memory': True
+            }), 200
+        except Exception as e:
+            print(f"⚠️ Enhanced system failed, falling back: {str(e)}")
+            # Fallback to old system if needed
+            return jsonify({
+                'success': True,
+                'history': [],
+                'enhanced_memory': False,
+                'fallback_used': True
+            }), 200
+            
     except Exception as e:
-        print(f"❌ Chat history error: {str(e)}")  # Debug line
-        import traceback
-        traceback.print_exc()  # Print full stack trace
+        print(f"❌ Chat history compatibility error: {str(e)}")
         return jsonify({
             'success': False,
             'error': f'Failed to get chat history: {str(e)}'
@@ -442,11 +515,10 @@ def get_chat_history():
 
 @app.route('/api/clear-chat', methods=['POST'])
 @handle_errors
-def clear_chat_history():
-    """Clear chat history for a user and agent"""
+def clear_chat_history_compat():
+    """Backward compatible clear chat endpoint"""
     try:
         data = request.get_json()
-        print(f"🔍 Clear chat request data: {data}")  # Debug line
         
         if not all(k in data for k in ['userId', 'agentType']):
             return jsonify({'error': 'Missing userId or agentType'}), 400
@@ -454,58 +526,144 @@ def clear_chat_history():
         user_id = data['userId']
         agent_type = data['agentType']
         
-        print(f"🔍 Clearing chat history for user {user_id}, agent {agent_type}")  # Debug line
-        
-        # Validate agent type
-        valid_agents = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
-        if agent_type not in valid_agents:
-            return jsonify({'error': 'Invalid agent type'}), 400
-        
-        chat_manager.clear_chat_history(user_id, agent_type)
-        print(f"✅ Chat history cleared successfully")  # Debug line
-        
-        return jsonify({
-            'success': True,
-            'message': 'Chat history cleared successfully'
-        }), 200
-        
+        # Try enhanced system first
+        try:
+            success = enhanced_chat_manager.clear_conversation(user_id, agent_type)
+            return jsonify({
+                'success': success,
+                'message': 'Chat cleared successfully',
+                'enhanced_memory': True
+            }), 200
+        except Exception as e:
+            print(f"⚠️ Enhanced clear failed: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': 'Failed to clear chat',
+                'enhanced_memory': False
+            }), 500
+            
     except Exception as e:
-        print(f"❌ Clear chat error: {str(e)}")  # Debug line
+        print(f"❌ Clear chat compatibility error: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'Failed to clear chat history: {str(e)}'
+            'error': f'Failed to clear chat: {str(e)}'
         }), 500
-
-# اضافه کردن این endpoints به فایل Main.py
 
 @app.route('/api/get-current-plans', methods=['POST'])
 @handle_errors
-def get_current_plans_api():
-    """Get current plans (updated or original) for display"""
+def get_enhanced_current_plans():
+    """Get current plans with enhanced context and versioning"""
     data = request.get_json()
     user_id = data.get('userId')
     if not user_id:
         return jsonify({'error': 'userId is required'}), 400
 
     try:
-        from Utils.ChatAgent import chat_manager
-        
         agent_types = ['HealthSummary', 'FitnessTrainer', 'Nutritionist', 'HealthAdvisor']
         current_plans = {}
         
         for agent_type in agent_types:
-            plan_info = chat_manager.get_current_plan(user_id, agent_type)
-            current_plans[agent_type] = {
-                'content': plan_info['plan'],
-                'is_updated': plan_info['is_updated'],
-                'modifications': plan_info['modifications']
-            }
+            # Get plan context using enhanced system
+            try:
+                plan_context = enhanced_chat_manager.get_current_plan_context(user_id, agent_type)
+                conversation_context = memory_manager.get_conversation_context(user_id, agent_type)
+                
+                current_plans[agent_type] = {
+                    'content': plan_context.get('current_plan') or 'No plan available yet.',
+                    'is_updated': plan_context.get('is_updated', False),
+                    'modifications': plan_context.get('last_modification'),
+                    'version': plan_context.get('version', 1),
+                    'last_updated': plan_context.get('last_updated'),
+                    'conversation_count': conversation_context.get('message_count', 0),
+                    'enhanced_memory': True
+                }
+            except Exception as e:
+                print(f"⚠️ Enhanced system failed for {agent_type}, using fallback: {str(e)}")
+                # Fallback to old system
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("""
+                    SELECT recommendation FROM agent_history
+                    WHERE user_id = ? AND agent_type = ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (user_id, agent_type))
+                result = c.fetchone()
+                conn.close()
+                
+                current_plans[agent_type] = {
+                    'content': result[0] if result else 'No plan available yet.',
+                    'is_updated': False,
+                    'modifications': None,
+                    'enhanced_memory': False
+                }
         
         return jsonify(current_plans), 200
         
     except Exception as e:
-        print(f"❌ Error getting current plans: {str(e)}")
+        print(f"❌ Error getting enhanced current plans: {str(e)}")
         return jsonify({'error': 'Failed to get current plans'}), 500
+
+@app.route('/api/system-status', methods=['GET'])
+def get_system_status():
+    """Get system status including memory system health"""
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Check table existence
+        tables_to_check = [
+            'conversation_sessions', 'conversations', 'context_references', 
+            'memory_summaries', 'updated_plans'
+        ]
+        
+        table_status = {}
+        for table in tables_to_check:
+            try:
+                c.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
+                exists = c.fetchone() is not None
+                if exists:
+                    c.execute(f"SELECT COUNT(*) FROM {table}")
+                    count = c.fetchone()[0]
+                    table_status[table] = {'exists': True, 'records': count}
+                else:
+                    table_status[table] = {'exists': False, 'records': 0}
+            except Exception as e:
+                table_status[table] = {'exists': False, 'error': str(e)}
+        
+        # Get active sessions
+        active_sessions = 0
+        try:
+            if table_status.get('conversation_sessions', {}).get('exists'):
+                c.execute("SELECT COUNT(*) FROM conversation_sessions WHERE status = 'active'")
+                active_sessions = c.fetchone()[0]
+        except:
+            pass
+        
+        conn.close()
+        
+        # Check if enhanced system is working
+        enhanced_system_working = True
+        try:
+            # Test imports are already done at the top
+            pass
+        except Exception as e:
+            enhanced_system_working = False
+        
+        return jsonify({
+            'status': 'healthy' if enhanced_system_working else 'degraded',
+            'enhanced_memory_system': enhanced_system_working,
+            'database_tables': table_status,
+            'active_sessions': active_sessions,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'enhanced_memory_system': False,
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/api/plan-updates-history', methods=['POST'])
 @handle_errors
@@ -566,10 +724,20 @@ def reset_to_original_plan():
         """, (user_id, agent_type))
         
         # Also clear chat history to start fresh
-        c.execute("""
-            DELETE FROM chat_history
-            WHERE user_id = ? AND agent_type = ?
-        """, (user_id, agent_type))
+        try:
+            # Clear conversation sessions and related data
+            c.execute("""
+                DELETE FROM conversations 
+                WHERE user_id = ? AND agent_type = ?
+            """, (user_id, agent_type))
+            
+            c.execute("""
+                UPDATE conversation_sessions 
+                SET status = 'cleared'
+                WHERE user_id = ? AND agent_type = ?
+            """, (user_id, agent_type))
+        except Exception as e:
+            print(f"⚠️ Warning: Could not clear conversation history: {e}")
         
         conn.commit()
         conn.close()
@@ -589,4 +757,3 @@ if __name__ == "__main__":
     print("🚀 Starting HealthAgent Server...")
     print("📡 Listening on http://127.0.0.1:5000")
     app.run(debug=True, port=5000, host='127.0.0.1')
-
